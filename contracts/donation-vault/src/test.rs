@@ -3509,6 +3509,147 @@ fn create_stream_skips_verification_when_no_registry_configured() {
 }
 
 // =============================================================================
+// vault and registry integration (issue #296)
+// =============================================================================
+
+/// The field names `#[contracttype]` encodes a struct's map keys with, in
+/// the order it encodes them.
+fn struct_field_names(env: &Env, value: Val) -> Vec<Symbol> {
+    let scval = ScVal::try_from_val(env, &value).expect("a contracttype struct encodes as ScVal");
+    match scval {
+        ScVal::Map(Some(map)) => {
+            let mut keys = Vec::new(env);
+            for entry in map.0.iter() {
+                keys.push_back(
+                    Symbol::try_from_val(env, &entry.key).expect("struct keys encode as symbols"),
+                );
+            }
+            keys
+        }
+        other => panic!("expected a struct map, got {other:?}"),
+    }
+}
+
+/// `NgoRecord` is a hand-written copy of ngo-registry's `Ngo`, so nothing but
+/// a test holds the two in step. A field added, removed, renamed, or retyped
+/// in the registry makes the vault's decode fail, and because `create_stream`
+/// maps that failure to `Error::NgoNotVerified`, every stream to every NGO
+/// would start failing closed with no hint as to why.
+#[test]
+fn ngo_record_mirrors_the_registry_ngo_struct() {
+    let (s, registry) = setup_with_registry();
+    let name = soroban_sdk::String::from_str(&s.env, "Red Cross");
+    registry.register(&s.ngo, &name);
+    registry.approve_ngo(&s.ngo);
+
+    // Checked before the decode below, because a field added, removed, or
+    // renamed on either side names itself here, while the decode can only
+    // report that some map no longer fits some struct.
+    let expected_fields = soroban_sdk::vec![
+        &s.env,
+        Symbol::new(&s.env, "name"),
+        Symbol::new(&s.env, "owner"),
+        Symbol::new(&s.env, "verified"),
+    ];
+    let mirror = NgoRecord {
+        owner: s.ngo.clone(),
+        name: name.clone(),
+        verified: true,
+    };
+    assert_eq!(
+        struct_field_names(&s.env, mirror.into_val(&s.env)),
+        expected_fields,
+        "the vault's NgoRecord fields changed; ngo-registry's Ngo must match"
+    );
+
+    let ngo = registry.get_ngo(&s.ngo);
+    assert_eq!(
+        struct_field_names(&s.env, ngo.clone().into_val(&s.env)),
+        expected_fields,
+        "ngo-registry's Ngo fields changed; the vault's NgoRecord mirror must match"
+    );
+
+    // What the vault does on every create_stream: decode the registry's
+    // record into its own mirror. With the field names already pinned, a
+    // failure here means a field changed type.
+    let encoded: Val = ngo.clone().into_val(&s.env);
+    let record = NgoRecord::try_from_val(&s.env, &encoded)
+        .expect("ngo-registry's Ngo no longer decodes as the vault's NgoRecord");
+    assert_eq!(record.owner, s.ngo);
+    assert_eq!(record.name, name);
+    assert!(record.verified);
+
+    // And back the other way, so a change on either side is caught.
+    let mirrored: Val = record.into_val(&s.env);
+    let round_tripped = ngo_registry::Ngo::try_from_val(&s.env, &mirrored)
+        .expect("the vault's NgoRecord no longer decodes as ngo-registry's Ngo");
+    assert_eq!(round_tripped, ngo);
+}
+
+/// The whole cross-contract path in one environment: an NGO registers with
+/// the registry, an admin approves it, a donor opens a stream through the
+/// vault, and the admin revokes the approval again.
+#[test]
+fn registry_and_vault_lifecycle_register_approve_create_stream_revoke() {
+    let (s, registry) = setup_with_registry();
+    s.token_admin.mint(&s.donor, &2_000);
+
+    // register: an application alone is not enough for the vault.
+    registry.register(&s.ngo, &soroban_sdk::String::from_str(&s.env, "Red Cross"));
+    assert!(!registry.is_verified(&s.ngo));
+    assert_eq!(
+        s.client
+            .try_create_stream(&s.donor, &s.ngo, &s.token.address, &1_000, &10),
+        Err(Ok(Error::NgoNotVerified))
+    );
+    assert_eq!(s.token.balance(&s.donor), 2_000, "no funds may have moved");
+
+    // approve: the same call now goes through.
+    registry.approve_ngo(&s.ngo);
+    assert!(registry.is_verified(&s.ngo));
+    let stream_id = s
+        .client
+        .create_stream(&s.donor, &s.ngo, &s.token.address, &1_000, &10);
+
+    let stream = s.client.get_stream(&stream_id);
+    assert_eq!(stream.ngo, s.ngo);
+    assert_eq!(stream.balance, 1_000);
+    assert_eq!(stream.status, StreamStatus::Active);
+    assert_eq!(s.token.balance(&s.donor), 1_000);
+    assert_eq!(s.token.balance(&s.client.address), 1_000);
+
+    // The verified NGO draws what the stream has accrued.
+    s.env.ledger().with_mut(|l| l.timestamp += 10);
+    assert_eq!(s.client.withdraw(&stream_id), 100);
+    assert_eq!(s.token.balance(&s.ngo), 100);
+
+    // revoke: no new stream can be opened to the NGO.
+    registry.revoke_ngo(&s.ngo);
+    assert!(!registry.is_verified(&s.ngo));
+    assert!(!registry.get_ngo(&s.ngo).verified);
+    assert_eq!(
+        s.client
+            .try_create_stream(&s.donor, &s.ngo, &s.token.address, &1_000, &10),
+        Err(Ok(Error::NgoNotVerified))
+    );
+    assert_eq!(s.token.balance(&s.donor), 1_000);
+
+    // The stream already open is unaffected: the registry is consulted when
+    // a stream is created, not on every withdrawal, so a donation in flight
+    // keeps paying out and can still be cancelled by its donor.
+    s.env.ledger().with_mut(|l| l.timestamp += 10);
+    assert_eq!(s.client.withdraw(&stream_id), 100);
+    assert_eq!(s.token.balance(&s.ngo), 200);
+
+    s.client.cancel_stream(&stream_id);
+    let cancelled = s.client.get_stream(&stream_id);
+    assert_eq!(cancelled.status, StreamStatus::Cancelled);
+    assert_eq!(cancelled.balance, 0);
+    assert_eq!(s.token.balance(&s.donor), 1_800);
+    assert_eq!(s.token.balance(&s.client.address), 0);
+}
+
+// =============================================================================
 // withdraw_batch tests (issue #285)
 // =============================================================================
 
