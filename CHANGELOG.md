@@ -94,5 +94,9 @@ This project does not yet follow a formal versioning scheme — each contract's
 - `donation-vault`: `set_treasury` rejects the vault's own address with
   `Error::InvalidTreasury`, so protocol fees can't be locked in the
   contract.
+- `ngo-registry`: `update_name` rejects a name that is empty or
+  whitespace-only with `Error::InvalidName`, matching the check `register`
+  already applied. A rename could previously blank out an application's
+  name.
 
 [Unreleased]: https://github.com/StreamGive/streamgive-contracts/compare/main...HEAD

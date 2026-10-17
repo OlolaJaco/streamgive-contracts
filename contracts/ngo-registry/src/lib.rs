@@ -586,7 +586,9 @@ impl NgoRegistry {
     /// rename can be fixed without going through an admin. Requires the
     /// owner's auth. Fails with `Error::NotRegistered` for an address with
     /// no entry, and `Error::AlreadyVerified` once an admin has approved
-    /// it — the name an admin approved is the name that stays.
+    /// it — the name an admin approved is the name that stays. Names that
+    /// are empty or contain only ASCII whitespace return
+    /// `Error::InvalidName`, the same as in `register`.
     ///
     /// # Examples
     ///
@@ -609,6 +611,9 @@ impl NgoRegistry {
     pub fn update_name(env: Env, owner: Address, name: String) -> Result<(), Error> {
         owner.require_auth();
 
+        if is_whitespace_only(&name) {
+            return Err(Error::InvalidName);
+        }
         if name.len() > MAX_NGO_NAME_LEN {
             return Err(Error::NameTooLong);
         }

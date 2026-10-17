@@ -272,7 +272,7 @@ Codes 1–11 are the full `Error` enum. Admin-gated entry points first call
 | 8 | `NoPendingAdmin` | No admin proposal is pending. | `accept_admin`, `cancel_admin_proposal` |
 | 9 | `InvalidAdmin` | The proposed admin equals the current admin. | `propose_admin` |
 | 10 | `ArithmeticOverflow` | The owner index or total count left `u32`/`u64` range. | `register` |
-| 11 | `InvalidName` | The name is empty or whitespace-only. | `register` |
+| 11 | `InvalidName` | The name is empty or whitespace-only. | `register`, `update_name` |
 
 ## Status
 

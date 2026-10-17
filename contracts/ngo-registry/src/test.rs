@@ -139,6 +139,48 @@ fn update_name_rejects_name_over_max_length() {
 }
 
 #[test]
+fn update_name_rejects_empty_name() {
+    let (env, client, _admin) = setup();
+    let owner = Address::generate(&env);
+    let original = String::from_str(&env, "Red Cross");
+    client.register(&owner, &original);
+
+    let result = client.try_update_name(&owner, &String::from_str(&env, ""));
+
+    assert_eq!(result, Err(Ok(Error::InvalidName)));
+    // The rejected rename leaves the stored name alone.
+    assert_eq!(client.get_ngo(&owner).name, original);
+}
+
+#[test]
+fn update_name_rejects_whitespace_only_name() {
+    let (env, client, _admin) = setup();
+    let owner = Address::generate(&env);
+    let original = String::from_str(&env, "Red Cross");
+    client.register(&owner, &original);
+
+    let result = client.try_update_name(&owner, &String::from_str(&env, " \t\n\r"));
+
+    assert_eq!(result, Err(Ok(Error::InvalidName)));
+    assert_eq!(client.get_ngo(&owner).name, original);
+}
+
+#[test]
+fn update_name_rejects_blank_name_without_publishing_an_event() {
+    let (env, client, _admin) = setup();
+    let owner = Address::generate(&env);
+    client.register(&owner, &String::from_str(&env, "Red Cross"));
+
+    assert_eq!(
+        client.try_update_name(&owner, &String::from_str(&env, "   ")),
+        Err(Ok(Error::InvalidName))
+    );
+
+    // A rejected rename must not publish a renamed event for indexers to pick up.
+    assert_eq!(env.events().all(), vec![&env]);
+}
+
+#[test]
 fn get_unregistered_ngo_fails() {
     let (env, client, _admin) = setup();
     let random = Address::generate(&env);
