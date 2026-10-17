@@ -878,3 +878,78 @@ fn list_ngos_unregister_last_and_only_entry() {
 
     assert_eq!(client.list_ngos(&0, &10).len(), 0);
 }
+
+// =============================================================================
+// Error discriminants (issue #297)
+// =============================================================================
+
+/// Every `Error` variant, so the test below can check each one. A new
+/// variant has to be added here too — the length assertion fails otherwise.
+const ALL_ERRORS: [Error; 11] = [
+    Error::AlreadyInitialized,
+    Error::NotInitialized,
+    Error::AlreadyRegistered,
+    Error::NotRegistered,
+    Error::AlreadyVerified,
+    Error::NameTooLong,
+    Error::NotVerified,
+    Error::NoPendingAdmin,
+    Error::InvalidAdmin,
+    Error::ArithmeticOverflow,
+    Error::InvalidName,
+];
+
+/// The error codes are part of the public interface: a failed call returns
+/// the number, not the name, so clients and the README error table key off
+/// it. Reordering the enum or inserting a variant mid-list renumbers
+/// everything after it and silently changes what every caller sees.
+#[test]
+fn error_codes_are_pinned() {
+    // Exhaustive by construction: a new variant stops this match compiling
+    // until it is listed here with the number it will carry forever.
+    fn pinned(error: Error) -> u32 {
+        match error {
+            Error::AlreadyInitialized => 1,
+            Error::NotInitialized => 2,
+            Error::AlreadyRegistered => 3,
+            Error::NotRegistered => 4,
+            Error::AlreadyVerified => 5,
+            Error::NameTooLong => 6,
+            Error::NotVerified => 7,
+            Error::NoPendingAdmin => 8,
+            Error::InvalidAdmin => 9,
+            Error::ArithmeticOverflow => 10,
+            Error::InvalidName => 11,
+        }
+    }
+
+    for error in ALL_ERRORS {
+        assert_eq!(
+            error as u32,
+            pinned(error),
+            "{error:?} changed its error code; the README error table and \
+             every client decoding it must change too"
+        );
+    }
+
+    assert_eq!(
+        ALL_ERRORS.len(),
+        11,
+        "a variant was added or removed: list it in ALL_ERRORS and in the \
+         README error table"
+    );
+}
+
+/// The discriminant is also what crosses the contract boundary, not just
+/// what `as u32` reads off the enum.
+#[test]
+fn error_codes_cross_the_contract_boundary_unchanged() {
+    for error in ALL_ERRORS {
+        let wire: soroban_sdk::Error = error.into();
+        assert_eq!(
+            wire.get_code(),
+            error as u32,
+            "{error:?} changed on the wire"
+        );
+    }
+}

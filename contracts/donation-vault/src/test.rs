@@ -3995,3 +3995,104 @@ fn modify_rate_and_top_up_on_a_drained_stream() {
     s.env.ledger().with_mut(|l| l.timestamp += 10);
     assert_eq!(s.client.pending_accrual(&stream_id), 200);
 }
+
+// =============================================================================
+// Error discriminants (issue #297)
+// =============================================================================
+
+/// Every `Error` variant, so the test below can check each one. A new
+/// variant has to be added here too — the length assertion fails otherwise.
+const ALL_ERRORS: [Error; 23] = [
+    Error::AlreadyInitialized,
+    Error::NotInitialized,
+    Error::StreamNotFound,
+    Error::InvalidAmount,
+    Error::NothingToWithdraw,
+    Error::ContractPaused,
+    Error::FeeTooHigh,
+    Error::NoPendingAdmin,
+    Error::ArithmeticOverflow,
+    Error::SelfStream,
+    Error::InvalidTreasury,
+    Error::AlreadyPaused,
+    Error::AlreadyUnpaused,
+    Error::DepositTooLow,
+    Error::StreamCancelled,
+    Error::InvalidAdmin,
+    Error::StreamLimitExceeded,
+    Error::NgoNotVerified,
+    Error::StreamCounterMissing,
+    Error::AdminRenounced,
+    Error::FeeRequiresTreasury,
+    Error::NotPaused,
+    Error::MixedNgo,
+];
+
+/// The error codes are part of the public interface: a failed call returns
+/// the number, not the name, so clients and the README error table key off
+/// it. These have already been renumbered once (codes 16 to 18), which is
+/// exactly what this test exists to catch — reordering the enum or
+/// inserting a variant mid-list renumbers everything after it and silently
+/// changes what every caller sees.
+#[test]
+fn error_codes_are_pinned() {
+    // Exhaustive by construction: a new variant stops this match compiling
+    // until it is listed here with the number it will carry forever.
+    fn pinned(error: Error) -> u32 {
+        match error {
+            Error::AlreadyInitialized => 1,
+            Error::NotInitialized => 2,
+            Error::StreamNotFound => 3,
+            Error::InvalidAmount => 4,
+            Error::NothingToWithdraw => 5,
+            Error::ContractPaused => 6,
+            Error::FeeTooHigh => 7,
+            Error::NoPendingAdmin => 8,
+            Error::ArithmeticOverflow => 9,
+            Error::SelfStream => 10,
+            Error::InvalidTreasury => 11,
+            Error::AlreadyPaused => 12,
+            Error::AlreadyUnpaused => 13,
+            Error::DepositTooLow => 14,
+            Error::StreamCancelled => 15,
+            Error::InvalidAdmin => 16,
+            Error::StreamLimitExceeded => 17,
+            Error::NgoNotVerified => 18,
+            Error::StreamCounterMissing => 19,
+            Error::AdminRenounced => 20,
+            Error::FeeRequiresTreasury => 21,
+            Error::NotPaused => 22,
+            Error::MixedNgo => 23,
+        }
+    }
+
+    for error in ALL_ERRORS {
+        assert_eq!(
+            error as u32,
+            pinned(error),
+            "{error:?} changed its error code; the README error table and \
+             every client decoding it must change too"
+        );
+    }
+
+    assert_eq!(
+        ALL_ERRORS.len(),
+        23,
+        "a variant was added or removed: list it in ALL_ERRORS and in the \
+         README error table"
+    );
+}
+
+/// The discriminant is also what crosses the contract boundary, not just
+/// what `as u32` reads off the enum.
+#[test]
+fn error_codes_cross_the_contract_boundary_unchanged() {
+    for error in ALL_ERRORS {
+        let wire: soroban_sdk::Error = error.into();
+        assert_eq!(
+            wire.get_code(),
+            error as u32,
+            "{error:?} changed on the wire"
+        );
+    }
+}
